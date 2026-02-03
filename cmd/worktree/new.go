@@ -26,6 +26,9 @@ var newCmd = &cobra.Command{
 In both modes, opens the worktree in the configured editor and creates/switches to a tmux session.`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		// Enable verbose logging if flag is set
+		config.SetVerbose(verbose)
+
 		// Check if we're in a git repository
 		if !git.IsGitRepository() {
 			fmt.Fprintf(os.Stderr, "Error: not in a git repository\n")
@@ -187,8 +190,17 @@ In both modes, opens the worktree in the configured editor and creates/switches 
 			return
 		}
 		if tmux.IsInstalled() {
+			if verbose {
+				fmt.Println("[tmux] tmux is installed")
+			}
 			// Check if tmux_windows is configured
 			tmuxWindows := config.GetTmuxWindows()
+			if verbose {
+				fmt.Printf("[tmux] Found %d configured windows\n", len(tmuxWindows))
+				for i, w := range tmuxWindows {
+					fmt.Printf("[tmux]   %d: name=%q command=%q\n", i+1, w.Name, w.Command)
+				}
+			}
 			if len(tmuxWindows) > 0 {
 				// Convert config.TmuxWindow to tmux.TmuxWindow
 				windows := make([]tmux.TmuxWindow, len(tmuxWindows))

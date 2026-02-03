@@ -10,17 +10,45 @@ import (
 	"strings"
 
 	"github.com/todoengineering/wt/internal/config"
+	"github.com/todoengineering/wt/internal/registry"
 )
 
 type Worktree struct {
-	Name   string
-	Path   string
-	Branch string
+	Name    string
+	Path    string
+	Branch  string
+	Missing bool // true if registry entry but path doesn't exist
 }
 
 func ListWorktrees(repoName string) ([]Worktree, error) {
 	worktreeDir := GetWorktreeDir(repoName)
 
+	// Use registry.Sync to get merged data from registry and filesystem
+	syncedWorktrees, err := registry.Sync(repoName, worktreeDir)
+	if err != nil {
+		// Fall back to filesystem-only scan if registry fails
+		return listWorktreesFromFilesystem(repoName, worktreeDir)
+	}
+
+	var worktrees []Worktree
+	for _, sw := range syncedWorktrees {
+		worktrees = append(worktrees, Worktree{
+			Name:    filepath.Base(sw.Entry.Path),
+			Path:    sw.Entry.Path,
+			Branch:  sw.Entry.Branch,
+			Missing: sw.Status == registry.StatusMissing,
+		})
+	}
+
+	sort.Slice(worktrees, func(i, j int) bool {
+		return strings.ToLower(worktrees[i].Name) < strings.ToLower(worktrees[j].Name)
+	})
+
+	return worktrees, nil
+}
+
+// listWorktreesFromFilesystem is a fallback when registry is unavailable
+func listWorktreesFromFilesystem(repoName, worktreeDir string) ([]Worktree, error) {
 	if _, err := os.Stat(worktreeDir); os.IsNotExist(err) {
 		return []Worktree{}, nil
 	}
@@ -51,6 +79,21 @@ func ListWorktrees(repoName string) ([]Worktree, error) {
 }
 
 func WorktreeExistsForBranch(repoName, branchName string) (bool, *Worktree) {
+	// First check the registry
+	if entry := registry.Lookup(repoName, branchName); entry != nil {
+		// Verify the path still exists
+		if _, err := os.Stat(entry.Path); err == nil {
+			return true, &Worktree{
+				Name:   filepath.Base(entry.Path),
+				Path:   entry.Path,
+				Branch: entry.Branch,
+			}
+		}
+		// Path doesn't exist, clean up stale registry entry
+		registry.Unregister(repoName, branchName)
+	}
+
+	// Fall back to file system scan
 	worktrees, err := ListWorktrees(repoName)
 	if err != nil {
 		return false, nil
@@ -60,7 +103,7 @@ func WorktreeExistsForBranch(repoName, branchName string) (bool, *Worktree) {
 	sanitizedBranch := SanitizeBranchName(branchName)
 
 	for _, wt := range worktrees {
-		if wt.Name == sanitizedBranch || wt.Name == branchName {
+		if wt.Name == sanitizedBranch || wt.Name == branchName || wt.Branch == branchName {
 			return true, &wt
 		}
 	}
@@ -163,8 +206,21 @@ func ListAllProjects() ([]Project, error) {
 }
 
 func CreateWorktree(repoName, worktreeName, branchName string) (string, error) {
+	// First check if we already have this worktree registered
+	if entry := registry.Lookup(repoName, branchName); entry != nil {
+		// Verify the path still exists
+		if _, err := os.Stat(entry.Path); err == nil {
+			return "", fmt.Errorf("worktree for branch '%s' already exists at %s", branchName, entry.Path)
+		}
+		// Path doesn't exist, clean up stale registry entry
+		registry.Unregister(repoName, branchName)
+	}
+
+	// Sanitize the worktree name for use as a folder name
+	sanitizedName := SanitizeBranchName(worktreeName)
+
 	worktreeDir := GetWorktreeDir(repoName)
-	worktreePath := filepath.Join(worktreeDir, worktreeName)
+	worktreePath := filepath.Join(worktreeDir, sanitizedName)
 
 	// Create parent directory if it doesn't exist
 	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
@@ -173,7 +229,7 @@ func CreateWorktree(repoName, worktreeName, branchName string) (string, error) {
 
 	// Check if worktree already exists
 	if _, err := os.Stat(worktreePath); err == nil {
-		return "", fmt.Errorf("worktree '%s' already exists at %s", worktreeName, worktreePath)
+		return "", fmt.Errorf("worktree '%s' already exists at %s", sanitizedName, worktreePath)
 	}
 
 	// Create the worktree
@@ -181,6 +237,11 @@ func CreateWorktree(repoName, worktreeName, branchName string) (string, error) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to create worktree: %s", string(output))
+	}
+
+	// Register the worktree in the registry
+	if err := registry.Register(repoName, branchName, worktreePath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to register worktree: %v\n", err)
 	}
 
 	// Copy configured files from main repository to new worktree
@@ -201,9 +262,19 @@ func copyConfiguredFiles(worktreePath string) error {
 	}
 	mainRepoPath := strings.TrimSpace(string(output))
 
+	if config.IsVerbose() {
+		fmt.Printf("[copy] Main repo path: %s\n", mainRepoPath)
+	}
+
 	// Get files to copy from config
 	filesToCopy := config.GetCopyFiles()
+	if config.IsVerbose() {
+		fmt.Printf("[copy] Files to copy: %v\n", filesToCopy)
+	}
 	if len(filesToCopy) == 0 {
+		if config.IsVerbose() {
+			fmt.Println("[copy] No files configured to copy")
+		}
 		return nil
 	}
 
@@ -284,6 +355,11 @@ func copyFile(src, dst string) error {
 }
 
 func RemoveWorktree(worktreePath string) error {
+	// Unregister from the registry first (before removing the worktree)
+	if err := registry.UnregisterByPath(worktreePath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to unregister worktree: %v\n", err)
+	}
+
 	// Use git worktree remove with --force to handle uncommitted changes
 	cmd := exec.Command("git", "worktree", "remove", "--force", worktreePath)
 	output, err := cmd.CombinedOutput()

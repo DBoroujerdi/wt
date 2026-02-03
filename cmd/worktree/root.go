@@ -9,6 +9,7 @@ import (
 
 var noEditor bool
 var noTmux bool
+var verbose bool
 
 var rootCmd = &cobra.Command{
 	Use:   "wt",
@@ -29,6 +30,7 @@ func init() {
 	// Common behavior flags across subcommands that open things
 	rootCmd.PersistentFlags().BoolVar(&noEditor, "no-editor", false, "don't open the editor")
 	rootCmd.PersistentFlags().BoolVar(&noTmux, "no-tmux", false, "don't create/switch tmux")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output for debugging")
 
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(newCmd)

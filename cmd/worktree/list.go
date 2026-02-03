@@ -5,8 +5,20 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/todoengineering/wt/internal/git"
+)
+
+var (
+	// Styles for list output
+	repoStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	branchStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	pathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	arrowStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	warningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	missingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Italic(true)
+	noItemsStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
 )
 
 var (
@@ -20,6 +32,7 @@ type listEntry struct {
 	Name    string `json:"name"`
 	Path    string `json:"path"`
 	Branch  string `json:"branch"`
+	Missing bool   `json:"missing,omitempty"`
 }
 
 var listCmd = &cobra.Command{
@@ -38,7 +51,7 @@ var listCmd = &cobra.Command{
 				var out []listEntry
 				for _, p := range projects {
 					for _, wt := range p.Worktrees {
-						out = append(out, listEntry{Project: p.Name, Name: wt.Name, Path: wt.Path, Branch: wt.Branch})
+						out = append(out, listEntry{Project: p.Name, Name: wt.Name, Path: wt.Path, Branch: wt.Branch, Missing: wt.Missing})
 					}
 				}
 				enc := json.NewEncoder(os.Stdout)
@@ -60,19 +73,30 @@ var listCmd = &cobra.Command{
 			}
 
 			if len(projects) == 0 {
-				fmt.Println("No projects with worktrees found")
-				fmt.Printf("Worktree base directory: %s\n", git.GetWorktreeBaseDir())
+				fmt.Println(noItemsStyle.Render("No projects with worktrees found"))
+				fmt.Printf("Worktree base directory: %s\n", pathStyle.Render(git.GetWorktreeBaseDir()))
 				return
 			}
 
 			for _, p := range projects {
-				fmt.Printf("%s:\n", p.Name)
+				fmt.Printf("%s\n", repoStyle.Render(p.Name+":"))
 				if len(p.Worktrees) == 0 {
-					fmt.Println("  (no worktrees)")
+					fmt.Printf("  %s\n", noItemsStyle.Render("(no worktrees)"))
 					continue
 				}
 				for _, wt := range p.Worktrees {
-					fmt.Printf("  %s -> %s\n", wt.Name, wt.Path)
+					if wt.Missing {
+						fmt.Printf("  %s %s %s %s\n",
+							warningStyle.Render("⚠"),
+							missingStyle.Render(wt.Branch),
+							arrowStyle.Render("→"),
+							missingStyle.Render(wt.Path+" (missing)"))
+					} else {
+						fmt.Printf("  %s %s %s\n",
+							branchStyle.Render(wt.Branch),
+							arrowStyle.Render("→"),
+							pathStyle.Render(wt.Path))
+					}
 				}
 			}
 			return
@@ -98,7 +122,7 @@ var listCmd = &cobra.Command{
 		if listJSON {
 			var out []listEntry
 			for _, wt := range worktrees {
-				out = append(out, listEntry{Project: repoName, Name: wt.Name, Path: wt.Path, Branch: wt.Branch})
+				out = append(out, listEntry{Project: repoName, Name: wt.Name, Path: wt.Path, Branch: wt.Branch, Missing: wt.Missing})
 			}
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
@@ -117,14 +141,25 @@ var listCmd = &cobra.Command{
 		}
 
 		if len(worktrees) == 0 {
-			fmt.Printf("No worktrees found for repository '%s'\n", repoName)
-			fmt.Printf("Worktree directory: %s\n", git.GetWorktreeDir(repoName))
+			fmt.Printf("%s %s\n", noItemsStyle.Render("No worktrees found for repository"), repoStyle.Render("'"+repoName+"'"))
+			fmt.Printf("Worktree directory: %s\n", pathStyle.Render(git.GetWorktreeDir(repoName)))
 			return
 		}
 
-		fmt.Printf("Worktrees for repository '%s':\n", repoName)
+		fmt.Printf("Worktrees for repository %s\n", repoStyle.Render("'"+repoName+"':"))
 		for _, wt := range worktrees {
-			fmt.Printf("  %s -> %s\n", wt.Name, wt.Path)
+			if wt.Missing {
+				fmt.Printf("  %s %s %s %s\n",
+					warningStyle.Render("⚠"),
+					missingStyle.Render(wt.Branch),
+					arrowStyle.Render("→"),
+					missingStyle.Render(wt.Path+" (missing)"))
+			} else {
+				fmt.Printf("  %s %s %s\n",
+					branchStyle.Render(wt.Branch),
+					arrowStyle.Render("→"),
+					pathStyle.Render(wt.Path))
+			}
 		}
 	},
 }
