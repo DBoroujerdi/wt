@@ -37,4 +37,5 @@ func init() {
 	rootCmd.AddCommand(openCmd)
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(idleCmd)
+	rootCmd.AddCommand(agentCmd)
 }
